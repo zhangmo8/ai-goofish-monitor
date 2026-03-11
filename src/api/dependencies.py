@@ -15,12 +15,14 @@ from src.infrastructure.external.notification_clients.ntfy_client import NtfyCli
 from src.infrastructure.external.notification_clients.bark_client import BarkClient
 from src.infrastructure.external.notification_clients.telegram_client import TelegramClient
 from src.infrastructure.config.settings import notification_settings
+from src.services.license_service import LicenseService
 
 
 # 全局 ProcessService 实例（将在 app.py 中设置）
 _process_service_instance = None
 _scheduler_service_instance = None
 _task_generation_service_instance = None
+_license_service_instance = None
 
 
 def set_process_service(service: ProcessService):
@@ -39,6 +41,12 @@ def set_task_generation_service(service: TaskGenerationService):
     """设置全局 TaskGenerationService 实例"""
     global _task_generation_service_instance
     _task_generation_service_instance = service
+
+
+def set_license_service(service: LicenseService):
+    """设置全局 LicenseService 实例"""
+    global _license_service_instance
+    _license_service_instance = service
 
 
 # 服务依赖注入
@@ -86,3 +94,10 @@ def get_task_generation_service() -> TaskGenerationService:
     if _task_generation_service_instance is None:
         raise RuntimeError("TaskGenerationService 未初始化")
     return _task_generation_service_instance
+
+
+def get_license_service() -> LicenseService:
+    """获取远程许可证校验服务实例"""
+    if _license_service_instance is None:
+        raise RuntimeError("LicenseService 未初始化")
+    return _license_service_instance

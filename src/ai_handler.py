@@ -196,9 +196,41 @@ def validate_ai_response_format(parsed_response):
     return True
 
 
+def _get_notification_status_label(is_recommended=None):
+    if is_recommended is True:
+        return "推荐"
+    if is_recommended is False:
+        return "不推荐"
+    return "通知"
+
+
+def _build_notification_content(product_data, reason, is_recommended=None):
+    title = product_data.get('商品标题', 'N/A')
+    price = product_data.get('当前售价', 'N/A')
+    link = product_data.get('商品链接', '#')
+    status_label = _get_notification_status_label(is_recommended)
+
+    message_lines = []
+    if is_recommended is not None:
+        message_lines.append(f"结论: {status_label}")
+    message_lines.append(f"价格: {price}")
+    message_lines.append(f"原因: {reason}")
+
+    if PCURL_TO_MOBILE:
+        mobile_link = convert_goofish_link(link)
+        message_lines.append(f"手机端链接: {mobile_link}")
+        message_lines.append(f"电脑端链接: {link}")
+    else:
+        message_lines.append(f"链接: {link}")
+
+    message = "\n".join(message_lines)
+    notification_title = f"🚨 {status_label} | {title[:30]}..."
+    return notification_title, message
+
+
 @retry_on_failure(retries=3, delay=5)
-async def send_ntfy_notification(product_data, reason):
-    """当发现推荐商品时，异步发送一个高优先级的 ntfy.sh 通知。"""
+async def send_ntfy_notification(product_data, reason, is_recommended=None):
+    """异步发送商品或任务通知到已配置的所有渠道。"""
     if not NTFY_TOPIC_URL and not WX_BOT_URL and not (GOTIFY_URL and GOTIFY_TOKEN) and not BARK_URL and not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID) and not WEBHOOK_URL:
         safe_print("警告：未在 .env 文件中配置任何通知服务 (NTFY_TOPIC_URL, WX_BOT_URL, GOTIFY_URL/TOKEN, BARK_URL, TELEGRAM_BOT_TOKEN/CHAT_ID, WEBHOOK_URL)，跳过通知。")
         return
@@ -206,13 +238,12 @@ async def send_ntfy_notification(product_data, reason):
     title = product_data.get('商品标题', 'N/A')
     price = product_data.get('当前售价', 'N/A')
     link = product_data.get('商品链接', '#')
-    if PCURL_TO_MOBILE:
-        mobile_link = convert_goofish_link(link)
-        message = f"价格: {price}\n原因: {reason}\n手机端链接: {mobile_link}\n电脑端链接: {link}"
-    else:
-        message = f"价格: {price}\n原因: {reason}\n链接: {link}"
-
-    notification_title = f"🚨 新推荐! {title[:30]}..."
+    status_label = _get_notification_status_label(is_recommended)
+    notification_title, message = _build_notification_content(
+        product_data,
+        reason,
+        is_recommended=is_recommended,
+    )
 
     # --- 发送 ntfy 通知 ---
     if NTFY_TOPIC_URL:
@@ -371,8 +402,10 @@ async def send_ntfy_notification(product_data, reason):
             telegram_api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             
             # 格式化消息内容
-            telegram_message = f"🚨 <b>新推荐!</b>\n\n"
+            telegram_message = f"🚨 <b>{status_label}</b>\n\n"
             telegram_message += f"<b>{title[:50]}...</b>\n\n"
+            if is_recommended is not None:
+                telegram_message += f"📌 结论: {status_label}\n"
             telegram_message += f"💰 价格: {price}\n"
             telegram_message += f"📝 原因: {reason}\n"
             

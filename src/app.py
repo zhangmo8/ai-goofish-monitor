@@ -10,29 +10,40 @@ from fastapi.templating import Jinja2Templates
 from src.api.routes import (
     tasks,
     logs,
-    settings,
+    settings as settings_routes,
     prompts,
     results,
     login_state,
     websocket,
     accounts,
+    license as license_routes,
 )
 from src.api.dependencies import (
     set_process_service,
     set_scheduler_service,
     set_task_generation_service,
+    set_license_service,
 )
+from src.api.middleware.license_guard import add_license_guard_middleware
 from src.services.task_service import TaskService
 from src.services.process_service import ProcessService
 from src.services.scheduler_service import SchedulerService
 from src.services.task_generation_service import TaskGenerationService
+from src.services.license_service import LicenseService
 from src.infrastructure.persistence.json_task_repository import JsonTaskRepository
+from src.infrastructure.config.settings import settings as app_settings
 
 
 # 全局服务实例
 process_service = ProcessService()
 scheduler_service = SchedulerService(process_service)
 task_generation_service = TaskGenerationService()
+license_service = LicenseService(
+    config_url=app_settings.license_remote_json_url,
+    cache_ttl_seconds=app_settings.license_cache_ttl_seconds,
+    timeout_seconds=app_settings.license_http_timeout_seconds,
+    fail_open=app_settings.license_fail_open,
+)
 
 
 async def _sync_task_runtime_status(task_id: int, is_running: bool) -> None:
@@ -56,7 +67,7 @@ process_service.set_lifecycle_hooks(
 set_process_service(process_service)
 set_scheduler_service(scheduler_service)
 set_task_generation_service(task_generation_service)
-
+set_license_service(license_service)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -95,16 +106,18 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+add_license_guard_middleware(app, license_service)
 
 # 注册路由
 app.include_router(tasks.router)
 app.include_router(logs.router)
-app.include_router(settings.router)
+app.include_router(settings_routes.router)
 app.include_router(prompts.router)
 app.include_router(results.router)
 app.include_router(login_state.router)
 app.include_router(websocket.router)
 app.include_router(accounts.router)
+app.include_router(license_routes.router)
 
 # 挂载静态文件
 # 旧的静态文件目录（用于截图等）
@@ -128,8 +141,6 @@ async def health_check():
 from fastapi import Request, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from src.infrastructure.config.settings import settings
-
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -138,7 +149,7 @@ class LoginRequest(BaseModel):
 @app.post("/auth/status")
 async def auth_status(payload: LoginRequest):
     """检查认证状态"""
-    if payload.username == settings.web_username and payload.password == settings.web_password:
+    if payload.username == app_settings.web_username and payload.password == app_settings.web_password:
         return {"authenticated": True, "username": payload.username}
     raise HTTPException(status_code=401, detail="认证失败")
 
@@ -181,7 +192,6 @@ async def serve_spa(request: Request, full_path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    from src.infrastructure.config.settings import settings
 
-    print(f"启动新架构应用，端口: {settings.server_port}")
-    uvicorn.run(app, host="0.0.0.0", port=settings.server_port)
+    print(f"启动新架构应用，端口: {app_settings.server_port}")
+    uvicorn.run(app, host="0.0.0.0", port=app_settings.server_port)

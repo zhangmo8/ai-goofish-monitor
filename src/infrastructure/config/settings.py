@@ -94,6 +94,10 @@ class AppSettings(_EnvSettings):
     server_port: int = _env_field(8000, "SERVER_PORT")
     web_username: str = _env_field("admin", "WEB_USERNAME")
     web_password: str = _env_field("admin123", "WEB_PASSWORD")
+    license_remote_json_url: str = _env_field("", "LICENSE_REMOTE_JSON_URL")
+    license_cache_ttl_seconds: int = _env_field(300, "LICENSE_CACHE_TTL_SECONDS")
+    license_http_timeout_seconds: int = _env_field(5, "LICENSE_HTTP_TIMEOUT_SECONDS")
+    license_fail_open: bool = _env_field(False, "LICENSE_FAIL_OPEN")
 
     # 文件路径配置
     config_file: str = "config.json"

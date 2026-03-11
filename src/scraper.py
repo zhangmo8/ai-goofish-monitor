@@ -1064,9 +1064,11 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                         await send_ntfy_notification(
                                             item_data,
                                             ai_analysis_result.get("reason", "无"),
+                                            is_recommended=True,
                                         )
                                 else:
                                     from src.config import SKIP_AI_ANALYSIS
+                                    should_send_ai_notification = False
 
                                     # 检查是否跳过AI分析并直接发送通知
                                     if SKIP_AI_ANALYSIS:
@@ -1107,12 +1109,15 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                             "reason": "商品已跳过AI分析，直接通知",
                                             "keyword_hit_count": 0,
                                         }
+                                        should_send_ai_notification = True
                                         final_record["ai_analysis"] = ai_analysis_result
 
                                         # 直接发送通知，将所有商品标记为推荐
                                         log_time("商品已跳过AI分析，准备发送通知...")
                                         await send_ntfy_notification(
-                                            item_data, ai_analysis_result["reason"]
+                                            item_data,
+                                            ai_analysis_result["reason"],
+                                            is_recommended=True,
                                         )
                                     else:
                                         log_time(
@@ -1151,6 +1156,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                                     ai_analysis_result.setdefault(
                                                         "keyword_hit_count", 0
                                                     )
+                                                    should_send_ai_notification = True
                                                     final_record["ai_analysis"] = (
                                                         ai_analysis_result
                                                     )
@@ -1209,15 +1215,29 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                                     f"   [图片] 删除图片文件时出错: {e}"
                                                 )
 
-                                        # 3. Send notification if recommended
+                                        # 3. AI 分析成功后无论推荐与否都发送通知
                                         if (
-                                            ai_analysis_result
-                                            and ai_analysis_result.get("is_recommended")
+                                            should_send_ai_notification
+                                            and ai_analysis_result
+                                            and isinstance(
+                                                ai_analysis_result.get("is_recommended"),
+                                                bool,
+                                            )
                                         ):
-                                            log_time("商品被AI推荐，准备发送通知...")
+                                            recommendation_text = (
+                                                "推荐"
+                                                if ai_analysis_result.get("is_recommended")
+                                                else "不推荐"
+                                            )
+                                            log_time(
+                                                f"AI分析已完成，结论为{recommendation_text}，准备发送通知..."
+                                            )
                                             await send_ntfy_notification(
                                                 item_data,
                                                 ai_analysis_result.get("reason", "无"),
+                                                is_recommended=ai_analysis_result.get(
+                                                    "is_recommended"
+                                                ),
                                             )
                                 # --- END: Real-time Analysis & Notification ---
 

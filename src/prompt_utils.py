@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -34,6 +35,16 @@ META_PROMPT_TEMPLATE = """
 """
 
 ProgressCallback = Callable[[str, str], Awaitable[None]]
+RETRYABLE_AI_ERROR_MARKERS = (
+    "internalserviceerror",
+    "internal server error",
+    "service unavailable",
+    "temporarily unavailable",
+    "timeout",
+    "timed out",
+    "connection",
+    "rate limit",
+)
 
 
 async def _report_progress(
@@ -43,6 +54,22 @@ async def _report_progress(
 ) -> None:
     if progress_callback:
         await progress_callback(step_key, message)
+
+
+def _is_retryable_ai_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code >= 500 or status_code == 429
+
+    message = str(exc).lower()
+    return any(marker in message for marker in RETRYABLE_AI_ERROR_MARKERS)
+
+
+def _format_ai_error(exc: Exception) -> str:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return f"HTTP {status_code}: {exc}"
+    return str(exc)
 
 
 async def generate_criteria(
@@ -78,32 +105,52 @@ async def generate_criteria(
 
     await _report_progress(progress_callback, "llm", "正在调用 AI 生成分析标准。")
     print("正在调用AI生成新的分析标准，请稍候...")
-    try:
-        request_params = {
-            "model": ai_client.settings.model_name,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.5,
-        }
-        if ai_client.settings.enable_thinking:
-            request_params["extra_body"] = {"enable_thinking": False}
+    request_params = {
+        "model": ai_client.settings.model_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.5,
+    }
+    if ai_client.settings.enable_thinking:
+        request_params["extra_body"] = {"enable_thinking": False}
 
-        response = await ai_client.client.chat.completions.create(**request_params)
-        # 兼容不同API响应格式，检查response是否为字符串
-        if hasattr(response, 'choices'):
-            generated_text = response.choices[0].message.content
-        else:
-            # 如果response是字符串，则直接使用
-            generated_text = response
-        print("AI已成功生成内容。")
-        
-        # 处理content可能为None或空字符串的情况
-        if generated_text is None or generated_text.strip() == "":
-            raise RuntimeError("AI返回的内容为空，请检查模型配置或重试。")
-        
-        return generated_text.strip()
-    except Exception as e:
-        print(f"调用 OpenAI API 时出错: {e}")
-        raise e
+    max_attempts = 3
+    last_error: Optional[Exception] = None
+
+    for attempt in range(max_attempts):
+        try:
+            response = await ai_client.client.chat.completions.create(**request_params)
+            if hasattr(response, 'choices'):
+                generated_text = response.choices[0].message.content
+            else:
+                generated_text = response
+
+            print("AI已成功生成内容。")
+            if generated_text is None or generated_text.strip() == "":
+                raise RuntimeError("AI返回的内容为空，请检查模型配置或重试。")
+
+            return generated_text.strip()
+        except Exception as exc:
+            last_error = exc
+            error_text = _format_ai_error(exc)
+            retryable = _is_retryable_ai_error(exc)
+            is_last_attempt = attempt == max_attempts - 1
+            print(f"调用 OpenAI API 时出错，第 {attempt + 1}/{max_attempts} 次尝试失败: {error_text}")
+
+            if retryable and not is_last_attempt:
+                wait_seconds = attempt + 2
+                retry_message = f"AI 服务暂时异常，{wait_seconds} 秒后进行第 {attempt + 2} 次重试。"
+                await _report_progress(progress_callback, "llm", retry_message)
+                await asyncio.sleep(wait_seconds)
+                continue
+
+            if retryable:
+                raise RuntimeError(
+                    f"AI 服务暂时不可用，已重试 {max_attempts} 次仍失败。最后一次错误: {error_text}"
+                ) from exc
+
+            raise RuntimeError(f"调用 AI 生成分析标准失败: {error_text}") from exc
+
+    raise RuntimeError(f"调用 AI 生成分析标准失败: {_format_ai_error(last_error)}")
 
 
 async def update_config_with_new_task(new_task: dict, config_file: str = "config.json"):
